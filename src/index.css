@@ -833,14 +833,11 @@ select.form-input { cursor: pointer; appearance: none; }
     display: flex !important;
   }
 
-  /* Grid */
+  /* Grid — 3 columns on mobile, tight gap like a photo gallery */
   .media-grid-responsive {
-    grid-template-columns: repeat(2, 1fr) !important;
-    gap: 10px !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 2px !important;
   }
-
-  .media-card-responsive { border-radius: var(--radius-md) !important; }
-  .media-card-media-responsive { height: 128px !important; }
 
   /* Form rows */
   .form-row-responsive {

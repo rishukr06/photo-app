@@ -6,7 +6,6 @@ import {
   Calendar,
   HardDrive,
   X,
-  Eye,
   Copy,
   Check,
   AlertCircle,
@@ -57,7 +56,7 @@ function monthLabel(key: string): string {
 export const GalleryGrid: React.FC<GalleryGridProps> = ({
   creds, items, loading, cacheAgeMs, metaIndex, onMetaEnrich, onRefresh,
 }) => {
-  const [filterType, setFilterType] = useState<"all" | "image" | "video" | "other">("all");
+  const [filterType, setFilterType] = useState<"all" | "image" | "video" | "other">("image");
   const [selectedMonths, setSelectedMonths] = useState<Set<string>>(new Set());
   const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
   const [itemsGeneration, setItemsGeneration] = useState(0);
@@ -367,91 +366,42 @@ export const GalleryGrid: React.FC<GalleryGridProps> = ({
     return () => window.removeEventListener("keydown", onKey);
   }, [activeItem, handlePrev, handleNext]);
 
-  // Reusable card renderer
+  // Pure photo tile — no info bar below, actions live in the lightbox only
   const renderCard = (item: S3MediaItem) => {
-    const isImg = item.type === "image";
     const isVid = item.type === "video";
     return (
-      <div key={item.key} className="glass-panel media-card-responsive" style={styles.card}>
-        <div style={styles.cardMedia} className="media-card-media-responsive" onClick={() => setActiveItem(item)}>
-          {item.presignedUrl ? (
-            isImg ? (
-              <img src={item.presignedUrl} alt={item.name} style={styles.img} loading="lazy" />
-            ) : isVid ? (
-              <div style={styles.videoThumbnailWrapper}>
-                <video src={item.presignedUrl} style={styles.videoPreview} preload="metadata" muted />
-                <div style={styles.videoBadge}>VIDEO</div>
-              </div>
-            ) : (
-              <div style={styles.filePlaceholder}>
-                <FileText size={40} color="var(--text-muted)" />
-                <span style={styles.fileExt}>{item.name.split(".").pop()?.toUpperCase()}</span>
-              </div>
-            )
+      <div
+        key={item.key}
+        style={styles.card}
+        onClick={() => setActiveItem(item)}
+        title={item.name}
+      >
+        {item.presignedUrl ? (
+          item.type === "image" ? (
+            <img src={item.presignedUrl} alt={item.name} style={styles.img} loading="lazy" />
+          ) : isVid ? (
+            <>
+              <video src={item.presignedUrl} style={styles.img} preload="metadata" muted />
+              <div style={styles.videoBadge}>▶</div>
+            </>
           ) : (
-            <div style={styles.loaderPlaceholder} className="pulse"><span>Loading…</span></div>
-          )}
-          <div style={styles.hoverOverlay} className="hover-overlay-effect">
-            <Eye size={20} color="#fff" />
-          </div>
-          {/* Location badge */}
-          {(item.city || item.area || item.country) && (
-            <div style={styles.gpsBadge} title={[item.street, item.area, item.city, item.country].filter(Boolean).join(", ")}>
-              <MapPin size={10} />
-              <span style={{ fontSize: "0.65rem", marginLeft: "3px", maxWidth: "90px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {item.area || item.city || item.country}
-              </span>
+            <div style={styles.filePlaceholder}>
+              <FileText size={28} color="rgba(255,255,255,0.4)" />
             </div>
-          )}
-        </div>
+          )
+        ) : (
+          <div style={styles.loaderPlaceholder} className="pulse" />
+        )}
 
-        <div style={styles.cardInfo}>
-          <div style={styles.cardHeader}>
-            <span style={styles.cardName} title={item.name}>{item.name}</span>
-            <span style={styles.cardSize}>{formatSize(item.size)}</span>
-          </div>
-          <div style={styles.cardFooter}>
-            <span style={styles.cardDate}>
-              {item.dateTaken
-                ? new Date(item.dateTaken).toLocaleDateString()
-                : item.lastModified?.toLocaleDateString() ?? "—"}
+        {/* Location badge */}
+        {(item.city || item.area) && (
+          <div style={styles.gpsBadge} title={[item.street, item.area, item.city, item.country].filter(Boolean).join(", ")}>
+            <MapPin size={9} />
+            <span style={{ fontSize: "0.6rem", marginLeft: "2px", maxWidth: "80px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {item.area || item.city}
             </span>
-            <div style={styles.cardActions}>
-              {item.presignedUrl && (
-                <>
-                  <button
-                    className="btn btn-secondary btn-icon-only"
-                    style={styles.actionBtn}
-                    onClick={() => handleCopyUrl(item.presignedUrl!, item.key)}
-                    title="Copy Secure Link"
-                  >
-                    {copiedKey === item.key ? <Check size={14} color="var(--color-success)" /> : <Copy size={14} />}
-                  </button>
-                  <a
-                    href={item.presignedUrl}
-                    download={item.name}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-secondary btn-icon-only"
-                    style={styles.actionBtn}
-                    title="Download File"
-                  >
-                    <Download size={14} />
-                  </a>
-                </>
-              )}
-              <button
-                className="btn btn-danger btn-icon-only"
-                style={styles.actionBtn}
-                onClick={() => handleDelete(item.key)}
-                disabled={deletingKey === item.key}
-                title="Delete Permanently"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   };
@@ -1042,137 +992,52 @@ const styles: Record<string, React.CSSProperties> = {
   },
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-    gap: "16px",
+    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+    gap: "3px",
     width: "100%",
   },
   card: {
-    display: "flex",
-    flexDirection: "column",
-    overflow: "hidden",
-    borderRadius: "var(--radius-md)",
-    transition: "transform var(--transition-fast), box-shadow var(--transition-fast)",
-  },
-  cardMedia: {
-    width: "100%",
-    height: "168px",
-    background: "rgba(0, 0, 0, 0.4)",
-    display: "flex",
-    justifyContent: "center",
-    alignItems: "center",
     position: "relative",
-    cursor: "pointer",
+    aspectRatio: "1",
     overflow: "hidden",
-    borderBottom: "1px solid var(--border-color)",
+    cursor: "pointer",
+    backgroundColor: "var(--surface-secondary, #111)",
+    borderRadius: "2px",
   },
   img: {
     width: "100%",
     height: "100%",
     objectFit: "cover",
-    transition: "transform var(--transition-normal)",
-  },
-  videoThumbnailWrapper: {
-    width: "100%",
-    height: "100%",
-    position: "relative",
-  },
-  videoPreview: {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover",
+    display: "block",
+    transition: "transform 0.2s ease",
   },
   videoBadge: {
     position: "absolute",
     top: "8px",
     right: "8px",
-    background: "rgba(124, 58, 237, 0.88)",
+    background: "rgba(0,0,0,0.55)",
     color: "#fff",
-    fontSize: "0.62rem",
-    fontWeight: "700",
-    fontFamily: "var(--font-mono)",
-    padding: "2px 6px",
-    borderRadius: "4px",
-    letterSpacing: "0.04em",
+    fontSize: "0.75rem",
+    width: "26px",
+    height: "26px",
+    borderRadius: "50%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    backdropFilter: "blur(4px)",
   },
   filePlaceholder: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: "8px",
-  },
-  fileExt: {
-    fontSize: "0.72rem",
-    fontWeight: "700",
-    fontFamily: "var(--font-mono)",
-    color: "var(--text-secondary)",
-    background: "rgba(255,255,255,0.05)",
-    padding: "2px 7px",
-    borderRadius: "4px",
-  },
-  loaderPlaceholder: {
-    fontSize: "0.82rem",
-    color: "var(--text-muted)",
-  },
-  hoverOverlay: {
-    position: "absolute",
-    top: 0,
-    left: 0,
     width: "100%",
     height: "100%",
-    background: "rgba(7, 9, 14, 0.4)",
     display: "flex",
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "center",
-    opacity: 0,
-    transition: "opacity var(--transition-fast)",
+    background: "rgba(255,255,255,0.04)",
   },
-  cardInfo: {
-    padding: "12px 14px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-  },
-  cardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: "10px",
-  },
-  cardName: {
-    fontSize: "0.8rem",
-    fontWeight: "500",
-    color: "var(--text-primary)",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    flex: 1,
-  },
-  cardSize: {
-    fontSize: "0.72rem",
-    color: "var(--text-muted)",
-    flexShrink: 0,
-    fontFamily: "var(--font-mono)",
-  },
-  cardFooter: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "8px",
-  },
-  cardDate: {
-    fontSize: "0.72rem",
-    color: "var(--text-muted)",
-  },
-  cardActions: {
-    display: "flex",
-    gap: "3px",
-  },
-  actionBtn: {
-    padding: "5px",
-    borderRadius: "6px",
-    minHeight: "unset",
-    height: "28px",
-    width: "28px",
+  loaderPlaceholder: {
+    width: "100%",
+    height: "100%",
+    background: "rgba(255,255,255,0.04)",
   },
 
   /* Lightbox Modal — layout handled by CSS classes, only non-responsive styles here */
