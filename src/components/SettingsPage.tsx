@@ -1,4 +1,5 @@
-import { ArrowLeft, Sun, Moon, LogOut, Shield, Info, HelpCircle, Database } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, Sun, Moon, LogOut, Shield, Info, HelpCircle, Database, RefreshCw } from "lucide-react";
 import type { S3Credentials } from "../utils/s3";
 
 interface SettingsPageProps {
@@ -10,7 +11,27 @@ interface SettingsPageProps {
   onOpenGuide: () => void;
 }
 
+async function clearAppCacheAndReload() {
+  // Clear all Cache API caches (service worker caches, if any)
+  if ("caches" in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => caches.delete(k)));
+  }
+  // Clear only our app's cached data — keep credentials and theme preference
+  Object.keys(localStorage)
+    .filter(k =>
+      k.startsWith("s3store_list_") ||
+      k.startsWith("s3store_url_")  ||
+      k.startsWith("s3store_metaidx_")
+    )
+    .forEach(k => localStorage.removeItem(k));
+  // Bust the URL so iOS PWA fetches a fresh index.html rather than the cached one
+  const bust = "?v=" + Date.now();
+  window.location.replace(window.location.origin + window.location.pathname + bust);
+}
+
 export function SettingsPage({ theme, onToggleTheme, creds, onDisconnect, onBack, onOpenGuide }: SettingsPageProps) {
+  const [clearing, setClearing] = useState(false);
   return (
     <div style={s.page}>
       {/* Header */}
@@ -112,6 +133,31 @@ export function SettingsPage({ theme, onToggleTheme, creds, onDisconnect, onBack
                 </div>
               </div>
               <span style={s.chevron}>›</span>
+            </div>
+          </div>
+        </section>
+
+        {/* App cache */}
+        <section style={s.section}>
+          <p style={s.sectionLabel}>App</p>
+          <div style={s.card}>
+            <div
+              style={{ ...s.row, cursor: clearing ? "default" : "pointer", opacity: clearing ? 0.6 : 1 }}
+              onClick={async () => {
+                if (clearing) return;
+                setClearing(true);
+                await clearAppCacheAndReload();
+              }}
+            >
+              <div style={s.rowLeft}>
+                <div style={s.iconWrap}>
+                  <RefreshCw size={16} style={clearing ? { animation: "spin 0.8s linear infinite" } : undefined} />
+                </div>
+                <div>
+                  <p style={s.rowTitle}>{clearing ? "Clearing…" : "Clear Cache & Reload"}</p>
+                  <p style={s.rowSub}>Force downloads the latest app version. Fixes camera or loading issues after updates.</p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
