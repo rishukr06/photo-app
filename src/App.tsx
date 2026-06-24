@@ -313,7 +313,7 @@ function App() {
                 if (activeTab === "settings") {
                   setActiveTab(prevTab);
                 } else {
-                  if (activeTab !== "settings") setPrevTab(activeTab as "gallery" | "upload");
+                  setPrevTab(activeTab);
                   setActiveTab("settings");
                 }
               }}
