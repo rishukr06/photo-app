@@ -99,6 +99,14 @@ async function readLegacyJson(creds: S3Credentials): Promise<MetaIndex> {
 
 const n = (v?: string): string | null => v ?? null; // undefined → Arrow null
 
+const CREATE_TABLE_SQL = `
+  CREATE TABLE _s3meta (
+    key VARCHAR, date_taken VARCHAR, gps_lat VARCHAR, gps_lng VARCHAR,
+    city VARCHAR, country VARCHAR, country_code VARCHAR,
+    area VARCHAR, street VARCHAR
+  )
+`;
+
 /** MetaIndex → Parquet bytes. Uses Arrow bulk insert + DuckDB COPY. */
 async function encodeParquet(index: MetaIndex): Promise<Uint8Array> {
   const db   = await getDuckDB();
@@ -108,18 +116,14 @@ async function encodeParquet(index: MetaIndex): Promise<Uint8Array> {
     // Always start fresh to avoid table state from a previous failed call
     await conn.query("DROP TABLE IF EXISTS _s3meta");
 
+    // Create table explicitly — never rely on insertArrowTable's create:true
+    // option, which fails silently in some DuckDB-WASM builds.
+    await conn.query(CREATE_TABLE_SQL);
+
     const keys = Object.keys(index);
 
-    if (keys.length === 0) {
-      await conn.query(`
-        CREATE TABLE _s3meta (
-          key VARCHAR, date_taken VARCHAR, gps_lat VARCHAR, gps_lng VARCHAR,
-          city VARCHAR, country VARCHAR, country_code VARCHAR,
-          area VARCHAR, street VARCHAR
-        )
-      `);
-    } else {
-      // Arrow batch insert — much faster than per-row SQL for large indices
+    if (keys.length > 0) {
+      // Arrow batch insert into the pre-created table
       const arrow = tableFromArrays({
         key:          keys                                    as any,
         date_taken:   keys.map(k => n(index[k].dateTaken))   as any,
@@ -131,7 +135,7 @@ async function encodeParquet(index: MetaIndex): Promise<Uint8Array> {
         area:         keys.map(k => n(index[k].area))         as any,
         street:       keys.map(k => n(index[k].street))       as any,
       });
-      await conn.insertArrowTable(arrow as any, { name: "_s3meta", create: true });
+      await conn.insertArrowTable(arrow as any, { name: "_s3meta" });
     }
 
     // Write compressed Parquet into DuckDB's virtual FS
