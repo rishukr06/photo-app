@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Cloud,
   Image as ImageIcon,
@@ -11,7 +11,7 @@ import {
   Info,
   X,
 } from "lucide-react";
-import { listS3Objects, checkCorsSufficient, applyRequiredCors } from "./utils/s3";
+import { listS3Objects, checkCorsSufficient, applyRequiredCors, uploadS3FileWithProgress } from "./utils/s3";
 import { warmDuckDB } from "./utils/duckdb";
 import type { S3Credentials, S3MediaItem } from "./utils/s3";
 import { loadMetaIndex, clearMetaIndexCache, batchUpsertMetaEntries } from "./utils/metaIndex";
@@ -24,12 +24,13 @@ import {
   getListCacheAge,
   pruneUrlCache,
 } from "./utils/cache";
+import { reverseGeocode } from "./utils/geocode";
+import * as exifr from "exifr";
 import { SetupWizard } from "./components/SetupWizard";
 import { BulkUploader } from "./components/BulkUploader";
 import { GalleryGrid } from "./components/GalleryGrid";
 import { UserGuide } from "./components/UserGuide";
 import { SettingsPage } from "./components/SettingsPage";
-import { CameraView } from "./components/CameraView";
 
 interface Toast {
   id: string;
@@ -42,8 +43,9 @@ function App() {
   console.log("DEBUG: App render body executing. creds status:", creds ? "non-null" : "null");
   const [items, setItems] = useState<S3MediaItem[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<"gallery" | "upload" | "camera" | "settings">("gallery");
-  const [prevTab, setPrevTab] = useState<"gallery" | "upload" | "camera">("gallery");
+  const [activeTab, setActiveTab] = useState<"gallery" | "upload" | "settings">("gallery");
+  const [prevTab, setPrevTab] = useState<"gallery" | "upload">("gallery");
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [initialized, setInitialized] = useState<boolean>(false);
   const [cacheAgeMs, setCacheAgeMs] = useState<number | null>(null);
@@ -136,6 +138,61 @@ function App() {
       batchUpsertMetaEntries(creds, entries).catch(console.warn);
     }
   }, [creds]);
+
+  // Upload a photo/video captured via the native camera input
+  const handleCameraCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // reset so same file can re-trigger
+    if (!file || !creds) return;
+
+    showToast("Uploading photo…", "info");
+    try {
+      // Read EXIF from the captured image
+      let gpsLat: string | undefined;
+      let gpsLng: string | undefined;
+      let dateTaken: string | undefined;
+      try {
+        const exif = await exifr.parse(file, { gps: true, tiff: true });
+        if (exif?.latitude != null) gpsLat = String(exif.latitude);
+        if (exif?.longitude != null) gpsLng = String(exif.longitude);
+        if (exif?.DateTimeOriginal) dateTaken = new Date(exif.DateTimeOriginal).toISOString();
+      } catch { /* EXIF not available — fine */ }
+
+      const now = new Date().toISOString();
+      const destKey = `${creds.prefix ?? ""}${file.name}`;
+      const meta: Record<string, string> = {
+        "original-name": file.name,
+        "date-taken": dateTaken ?? now,
+        "file-date": now,
+      };
+      if (gpsLat) { meta["gps-lat"] = gpsLat; meta["gps-lng"] = gpsLng!; }
+
+      await uploadS3FileWithProgress(creds, file, destKey, () => {}, meta);
+
+      const entry: MetaEntry = { dateTaken: dateTaken ?? now };
+      if (gpsLat && gpsLng) {
+        entry.gpsLat = gpsLat;
+        entry.gpsLng = gpsLng;
+        try {
+          const geo = await reverseGeocode(gpsLat, gpsLng);
+          if (geo.city)        entry.city        = geo.city;
+          if (geo.country)     entry.country     = geo.country;
+          if (geo.countryCode) entry.countryCode = geo.countryCode;
+          if (geo.area)        entry.area        = geo.area;
+          if (geo.street)      entry.street      = geo.street;
+        } catch { /* geocoding optional */ }
+      }
+      await batchUpsertMetaEntries(creds, { [destKey]: entry });
+
+      clearCachedList(creds.bucketName);
+      clearMetaIndexCache(creds.bucketName);
+      refreshGallery(creds, { force: true });
+      reloadMetaIndex(creds);
+      showToast("Photo saved to S3!", "success");
+    } catch (err: any) {
+      showToast(`Upload failed: ${err.message ?? err}`, "danger");
+    }
+  }, [creds, showToast, refreshGallery, reloadMetaIndex]);
 
   // Apply the correct CORS rule then re-check
   const handleFixCors = useCallback(async () => {
@@ -256,7 +313,7 @@ function App() {
                 if (activeTab === "settings") {
                   setActiveTab(prevTab);
                 } else {
-                  setPrevTab(activeTab as "gallery" | "upload" | "camera");
+                  if (activeTab !== "settings") setPrevTab(activeTab as "gallery" | "upload");
                   setActiveTab("settings");
                 }
               }}
@@ -285,7 +342,7 @@ function App() {
         ) : (
           <div style={styles.dashboardContainer}>
             {/* Dashboard Tabs Navigation (Desktop Only) */}
-            <div style={{ ...styles.tabNav, display: (activeTab === "settings" || activeTab === "camera") ? "none" : undefined }} className="glass-panel desktop-nav">
+            <div style={{ ...styles.tabNav, display: activeTab === "settings" ? "none" : undefined }} className="glass-panel desktop-nav">
               <div style={styles.tabButtons}>
                 <button
                   style={{
@@ -302,13 +359,9 @@ function App() {
                 </button>
 
                 <button
-                  style={{
-                    ...styles.tabButton,
-                    color: activeTab === "camera" ? "var(--color-primary)" : "var(--text-muted)",
-                    backgroundColor: activeTab === "camera" ? "var(--color-primary-dim)" : "transparent",
-                    borderColor: activeTab === "camera" ? "var(--border-color-hover)" : "transparent",
-                  }}
-                  onClick={() => setActiveTab("camera")}
+                  style={{ ...styles.tabButton, color: "var(--text-muted)" }}
+                  onClick={() => cameraInputRef.current?.click()}
+                  title="Take a photo"
                 >
                   <Camera size={15} />
                   <span>Camera</span>
@@ -340,8 +393,8 @@ function App() {
                   <span>Gallery</span>
                 </button>
                 <button
-                  className={`mobile-bottom-nav-btn ${activeTab === "camera" ? "active" : ""}`}
-                  onClick={() => setActiveTab("camera")}
+                  className="mobile-bottom-nav-btn"
+                  onClick={() => cameraInputRef.current?.click()}
                 >
                   <Camera size={18} />
                   <span>Camera</span>
@@ -356,7 +409,7 @@ function App() {
                 <button
                   className={`mobile-bottom-nav-btn ${activeTab === "settings" ? "active" : ""}`}
                   onClick={() => {
-                    if (activeTab !== "settings") setPrevTab(activeTab as "gallery" | "upload" | "camera");
+                    if (activeTab !== "settings") setPrevTab(activeTab as "gallery" | "upload");
                     setActiveTab("settings");
                   }}
                 >
@@ -367,7 +420,7 @@ function App() {
             </nav>
 
             {/* CORS warning banner */}
-            {corsOk === false && activeTab !== "settings" && activeTab !== "camera" && (
+            {corsOk === false && activeTab !== "settings" && (
               <div className="glass-panel" style={styles.corsBanner}>
                 <AlertCircle size={16} color="var(--color-warning)" style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: "0.82rem" }}>
@@ -395,17 +448,6 @@ function App() {
                   onDisconnect={handleDisconnect}
                   onBack={() => setActiveTab(prevTab)}
                   onOpenGuide={() => { setActiveTab(prevTab); setIsGuideOpen(true); }}
-                />
-              ) : activeTab === "camera" ? (
-                <CameraView
-                  creds={creds}
-                  onBack={() => setActiveTab("gallery")}
-                  onUploadComplete={() => {
-                    clearCachedList(creds.bucketName);
-                    clearMetaIndexCache(creds.bucketName);
-                    refreshGallery(creds, { force: true });
-                    reloadMetaIndex(creds);
-                  }}
                 />
               ) : activeTab === "gallery" ? (
                 <GalleryGrid
@@ -468,6 +510,16 @@ function App() {
           );
         })}
       </div>
+
+      {/* Hidden native camera input — triggered by Camera nav button */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*,video/*"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={handleCameraCapture}
+      />
 
       <UserGuide isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </div>
