@@ -71,7 +71,10 @@ async function fetchParquetBytes(creds: S3Credentials): Promise<Uint8Array | nul
     const res = await getS3Client(creds).send(
       new GetObjectCommand({ Bucket: creds.bucketName, Key: s3ParquetKey(creds.prefix) })
     );
-    return (res.Body as any).transformToByteArray();
+    const bytes = await (res.Body as any).transformToByteArray();
+    // Valid Parquet must start and end with PAR1 (4 bytes each + 4 byte footer len = 12 min)
+    if (bytes.length < 12) return null;
+    return bytes;
   } catch { return null; }
 }
 
@@ -193,9 +196,14 @@ export async function loadMetaIndex(creds: S3Credentials): Promise<MetaIndex> {
   // 2. Parquet exists in S3 — decode via DuckDB
   const bytes = await fetchParquetBytes(creds);
   if (bytes) {
-    const index = await decodeParquet(bytes);
-    writeCache(creds.bucketName, index);
-    return index;
+    try {
+      const index = await decodeParquet(bytes);
+      writeCache(creds.bucketName, index);
+      return index;
+    } catch (err) {
+      // Corrupted Parquet in S3 — fall through and rebuild from scratch
+      console.warn("[s3store] Parquet decode failed, rebuilding index:", err);
+    }
   }
 
   // 3. First run — migrate from legacy JSON if present, then write Parquet

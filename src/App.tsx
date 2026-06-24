@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Cloud,
   Image as ImageIcon,
@@ -45,7 +45,6 @@ function App() {
   const [loading, setLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<"gallery" | "upload" | "settings">("gallery");
   const [prevTab, setPrevTab] = useState<"gallery" | "upload">("gallery");
-  const cameraInputRef = useRef<HTMLInputElement>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [initialized, setInitialized] = useState<boolean>(false);
   const [cacheAgeMs, setCacheAgeMs] = useState<number | null>(null);
@@ -139,11 +138,9 @@ function App() {
     }
   }, [creds]);
 
-  // Upload a photo/video captured via the native camera input
-  const handleCameraCapture = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // reset so same file can re-trigger
-    if (!file || !creds) return;
+  // Upload a captured photo/video file to S3
+  const handleCameraCapture = useCallback(async (file: File) => {
+    if (!creds) return;
 
     showToast("Uploading photo…", "info");
     try {
@@ -193,6 +190,39 @@ function App() {
       showToast(`Upload failed: ${err.message ?? err}`, "danger");
     }
   }, [creds, showToast, refreshGallery, reloadMetaIndex]);
+
+  // Open native camera via a dynamically created input — destroyed immediately
+  // after selection so it never sits in the DOM and holds a background camera lock.
+  const openNativeCamera = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,video/*";
+    input.capture = "environment";
+    input.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0;";
+    document.body.appendChild(input);
+
+    const cleanup = () => {
+      if (document.body.contains(input)) document.body.removeChild(input);
+      window.removeEventListener("focus", onFocus);
+    };
+
+    // Fired when user picks a photo
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      cleanup();
+      if (file) handleCameraCapture(file);
+    });
+
+    // Fired on modern browsers when user cancels the camera picker
+    input.addEventListener("cancel", cleanup);
+
+    // Fallback: when the window regains focus (user dismissed camera or
+    // switched away without selecting), clean up the dangling input.
+    const onFocus = () => setTimeout(cleanup, 300);
+    window.addEventListener("focus", onFocus, { once: true });
+
+    input.click();
+  }, [handleCameraCapture]);
 
   // Apply the correct CORS rule then re-check
   const handleFixCors = useCallback(async () => {
@@ -360,7 +390,7 @@ function App() {
 
                 <button
                   style={{ ...styles.tabButton, color: "var(--text-muted)" }}
-                  onClick={() => cameraInputRef.current?.click()}
+                  onClick={openNativeCamera}
                   title="Take a photo"
                 >
                   <Camera size={15} />
@@ -394,7 +424,7 @@ function App() {
                 </button>
                 <button
                   className="mobile-bottom-nav-btn"
-                  onClick={() => cameraInputRef.current?.click()}
+                  onClick={openNativeCamera}
                 >
                   <Camera size={18} />
                   <span>Camera</span>
@@ -510,16 +540,6 @@ function App() {
           );
         })}
       </div>
-
-      {/* Hidden native camera input — triggered by Camera nav button */}
-      <input
-        ref={cameraInputRef}
-        type="file"
-        accept="image/*,video/*"
-        capture="environment"
-        style={{ display: "none" }}
-        onChange={handleCameraCapture}
-      />
 
       <UserGuide isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
     </div>
